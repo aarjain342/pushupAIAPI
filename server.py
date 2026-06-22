@@ -7,12 +7,13 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
+# Config
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
 
-# MediaPipe
+# MediaPipe Pose
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(
     static_image_mode=False,
@@ -33,6 +34,16 @@ def calculate_angle(a, b, c):
     angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
     return np.degrees(angle)
 
+# ─── Warmup Endpoint (for cold start) ─────────────────────
+@app.route('/warmup', methods=['GET'])
+def warmup():
+    return jsonify({
+        "status": "warm",
+        "message": "Server is ready for analysis",
+        "mediapipe_loaded": True
+    })
+
+# ─── Main Analyze Endpoint ────────────────────────────────
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
     if 'video' not in request.files:
@@ -68,7 +79,6 @@ def analyze_video():
             if results.pose_landmarks:
                 landmarks = results.pose_landmarks.landmark
 
-                # Key points
                 r_shoulder = [landmarks[12].x, landmarks[12].y]
                 r_elbow = [landmarks[14].x, landmarks[14].y]
                 r_wrist = [landmarks[16].x, landmarks[16].y]
@@ -83,13 +93,11 @@ def analyze_video():
                 l_knee = [landmarks[25].x, landmarks[25].y]
                 l_ankle = [landmarks[27].x, landmarks[27].y]
 
-                # Mid points
                 m_hip = [(r_hip[0] + l_hip[0]) / 2, (r_hip[1] + l_hip[1]) / 2]
                 m_knee = [(r_knee[0] + l_knee[0]) / 2, (r_knee[1] + l_knee[1]) / 2]
                 m_shoulder = [(l_shoulder[0] + r_shoulder[0]) / 2, (l_shoulder[1] + r_shoulder[1]) / 2]
                 m_elbow = [(l_elbow[0] + r_elbow[0]) / 2, (l_elbow[1] + r_elbow[1]) / 2]
 
-                # Angles
                 r_shoulderang = 180 - calculate_angle(r_hip, r_shoulder, r_elbow)
                 l_shoulderang = 180 - calculate_angle(l_hip, l_shoulder, l_elbow)
                 hipang = calculate_angle(m_knee, m_hip, m_shoulder)
@@ -109,13 +117,7 @@ def analyze_video():
                     "knee_angle": round(float(m_knee_ang), 4)
                 })
             else:
-                # Fill with zeros if no detection
-                all_frame_features.append({
-                    "hip_angle": 0.0,
-                    "shoulder_angle": 0.0,
-                    "elbow_angle": 0.0,
-                    "knee_angle": 0.0
-                })
+                all_frame_features.append({"hip_angle": 0.0, "shoulder_angle": 0.0, "elbow_angle": 0.0, "knee_angle": 0.0})
 
             frame_count += 1
 
@@ -123,20 +125,13 @@ def analyze_video():
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        # === GROUP INTO SEQUENCES OF 30 FRAMES ===
+        # Group into sequences of 30 frames
         SEQUENCE_LENGTH = 30
         sequences = []
-        
         for i in range(0, len(all_frame_features), SEQUENCE_LENGTH):
             seq = all_frame_features[i:i + SEQUENCE_LENGTH]
-            # Pad last sequence with zeros if needed
             while len(seq) < SEQUENCE_LENGTH:
-                seq.append({
-                    "hip_angle": 0.0,
-                    "shoulder_angle": 0.0,
-                    "elbow_angle": 0.0,
-                    "knee_angle": 0.0
-                })
+                seq.append({"hip_angle": 0.0, "shoulder_angle": 0.0, "elbow_angle": 0.0, "knee_angle": 0.0})
             sequences.append(seq)
 
         return jsonify({
@@ -144,7 +139,7 @@ def analyze_video():
             "total_frames": frame_count,
             "num_sequences": len(sequences),
             "sequence_length": SEQUENCE_LENGTH,
-            "sequences": sequences,          # ← List of 30-frame sequences
+            "sequences": sequences,
             "message": f"Created {len(sequences)} sequences of {SEQUENCE_LENGTH} frames each"
         })
 
@@ -159,7 +154,7 @@ def health():
     return jsonify({"status": "healthy"})
 
 
+# For Render
 if __name__ == '__main__':
-    print("🚀 Push-up Sequence Server Running (30 frames per sequence)")
-    print("→ POST to http://10.0.0.199:5000/analyze")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
