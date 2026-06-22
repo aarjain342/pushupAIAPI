@@ -7,17 +7,16 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# Config
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
-# MediaPipe Pose
+# Lighter MediaPipe setup for Render free tier
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(
     static_image_mode=False,
-    model_complexity=1,
+    model_complexity=0,          # ← Lighter model (faster + less memory)
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
@@ -34,16 +33,14 @@ def calculate_angle(a, b, c):
     angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
     return np.degrees(angle)
 
-# ─── Warmup Endpoint (for cold start) ─────────────────────
 @app.route('/warmup', methods=['GET'])
 def warmup():
-    return jsonify({
-        "status": "warm",
-        "message": "Server is ready for analysis",
-        "mediapipe_loaded": True
-    })
+    return jsonify({"status": "warm", "message": "Server ready"})
 
-# ─── Main Analyze Endpoint ────────────────────────────────
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy"})
+
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
     if 'video' not in request.files:
@@ -125,7 +122,7 @@ def analyze_video():
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        # Group into sequences of 30 frames
+        # Sequences of 30 frames
         SEQUENCE_LENGTH = 30
         sequences = []
         for i in range(0, len(all_frame_features), SEQUENCE_LENGTH):
@@ -140,7 +137,7 @@ def analyze_video():
             "num_sequences": len(sequences),
             "sequence_length": SEQUENCE_LENGTH,
             "sequences": sequences,
-            "message": f"Created {len(sequences)} sequences of {SEQUENCE_LENGTH} frames each"
+            "message": f"Created {len(sequences)} sequences of {SEQUENCE_LENGTH} frames"
         })
 
     except Exception as e:
@@ -149,12 +146,6 @@ def analyze_video():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "healthy"})
-
-
-# For Render
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
